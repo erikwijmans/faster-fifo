@@ -2,7 +2,9 @@
 # cython: boundscheck=False
 # cython: infer_types=False
 
+import io
 import ctypes
+import pickle
 import multiprocessing
 
 from ctypes import c_size_t
@@ -37,7 +39,7 @@ cdef size_t bytes_to_ptr(b):
 
 
 class Queue:
-    def __init__(self, max_size_bytes=DEFAULT_CIRCULAR_BUFFER_SIZE, loads=None, dumps=None):
+    def __init__(self, max_size_bytes=DEFAULT_CIRCULAR_BUFFER_SIZE, loads=None, dumps=None, ctx=None):
         self.max_size_bytes = max_size_bytes
         self.max_bytes_to_read = self.max_size_bytes  # by default, read the whole queue if necessary
 
@@ -47,11 +49,13 @@ class Queue:
         if dumps is not None:
             self.dumps = dumps
 
-        self.closed = multiprocessing.RawValue(ctypes.c_bool, False)
+        ctx = ctx or multiprocessing
+
+        self.closed = ctx.RawValue(ctypes.c_bool, False)
 
         queue_obj_size = Q.queue_object_size()
-        self.queue_obj_buffer = multiprocessing.RawArray(ctypes.c_ubyte, queue_obj_size)
-        self.shared_memory = multiprocessing.RawArray(ctypes.c_ubyte, max_size_bytes)
+        self.queue_obj_buffer = ctx.RawArray(ctypes.c_ubyte, queue_obj_size)
+        self.shared_memory = ctx.RawArray(ctypes.c_ubyte, max_size_bytes)
 
         Q.create_queue(<void *> q_addr(self), max_size_bytes)
 
@@ -60,10 +64,12 @@ class Queue:
 
     # allow class level serializers
     def loads(self, msg_bytes):
-        return _ForkingPickler.loads(msg_bytes)
+        return pickle.loads(msg_bytes)
 
     def dumps(self, obj):
-        return _ForkingPickler.dumps(obj).tobytes()
+        buf = io.BytesIO()
+        _ForkingPickler(buf, pickle.HIGHEST_PROTOCOL).dump(obj)
+        return buf.getvalue()
 
     def close(self):
         """
